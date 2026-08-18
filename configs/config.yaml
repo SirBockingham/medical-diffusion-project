@@ -1,0 +1,27 @@
+#config.yaml
+
+paths:
+  data_raw: "data/raw"
+  data_metadata: "data/metadata"
+  data_splits: "data/splits"
+  data_processed: "data/processed"
+  checkpoints: "checkpoints"
+  outputs_checks: "outputs/checks"
+  outputs_generated_samples: "outputs/generated_samples"
+
+
+  csv_filename: "Data_Entry_2017.csv"
+
+
+
+data:
+  image_size: 256
+  batch_size: 16
+  num_workers: 4
+  train_ratio: 0.7
+  val_ratio: 0.15
+  test_ratio: 0.15
+
+
+
+seed: 47
