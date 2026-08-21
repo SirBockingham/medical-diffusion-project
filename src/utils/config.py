@@ -61,6 +61,7 @@ def load_config(config_path: str | Path | None = None) -> dict[str, Any]:
     resolved_config["paths"] = resolve_directory_paths(raw_config["paths"], project_root)
     resolved_config["data"] = raw_config["data"]
     resolved_config["seed"] = raw_config["seed"]
+    resolved_config["model"] = raw_config["model"]
     
     metadata_dir = resolved_config["paths"]["data_metadata"]
     csv_filename = raw_config["paths"]["csv_filename"]

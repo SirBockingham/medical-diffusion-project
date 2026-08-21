@@ -2,7 +2,7 @@ import sys
 from pathlib import Path
 
 import torch
-from diffusers import UNet2DModel
+from diffusers import UNet2DModel # type: ignore
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from utils.config import load_config
