@@ -4,8 +4,9 @@ import sys
 from pathlib import Path
 
 import torch
-from dataset import MedicalImageDataset
 from torch.utils.data import DataLoader
+
+from data.dataset import MedicalImageDataset
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from utils.config import load_config
@@ -127,6 +128,7 @@ def build_dataloaders(
         batch_size=batch_size,
         shuffle=True,
         num_workers=num_workers,
+        collate_fn=collate_batch
     )
     
     val_loader = DataLoader(
@@ -134,6 +136,7 @@ def build_dataloaders(
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
+        collate_fn=collate_batch
     )
     
     test_loader = DataLoader(
@@ -141,6 +144,7 @@ def build_dataloaders(
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
+        collate_fn=collate_batch
     )
     
     
