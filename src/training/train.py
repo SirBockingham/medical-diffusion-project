@@ -9,8 +9,6 @@ from torch.utils.data import DataLoader
 
 SRC_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SRC_DIR))
-# sys.path.insert(0, str(SRC_DIR / "data"))
-# sys.path.insert(0, str(SRC_DIR / "models"))
 
 from diffusers import DDPMScheduler, UNet2DModel  # type: ignore
 
