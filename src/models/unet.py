@@ -15,7 +15,8 @@ def build_unet(
         layers_per_block: int,
         block_out_channels: list[int],
         down_block_types: list[str],
-        up_block_types: list[str]
+        up_block_types: list[str],
+        num_class_embeds: int | None = None
 ) -> UNet2DModel:
     
     block_count = len(block_out_channels)
@@ -31,14 +32,19 @@ def build_unet(
         layers_per_block=layers_per_block,
         block_out_channels=tuple(block_out_channels),
         down_block_types=tuple(down_block_types),
-        up_block_types=tuple(up_block_types)
+        up_block_types=tuple(up_block_types),
+        num_class_embeds=num_class_embeds
     )
     
     return model
 
 
 
-def build_unet_from_config(config: dict | None = None) -> UNet2DModel:
+def build_unet_from_config(
+        config: dict | None = None,
+        num_class_embeds: int | None = None
+) -> UNet2DModel:
+    
     if config is None:
         config = load_config()
  
@@ -53,6 +59,7 @@ def build_unet_from_config(config: dict | None = None) -> UNet2DModel:
         block_out_channels=model_config["block_out_channels"],
         down_block_types=model_config["down_block_types"],
         up_block_types=model_config["up_block_types"],
+        num_class_embeds=num_class_embeds
     )
     
 

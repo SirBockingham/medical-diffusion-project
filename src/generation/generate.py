@@ -1,4 +1,5 @@
 import argparse
+import json
 import math
 import sys
 import time
@@ -11,7 +12,7 @@ from PIL import Image
 SRC_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SRC_DIR))
 
-from diffusers import DDPMScheduler, UNet2DModel # type: ignore
+from diffusers import DDPMScheduler, UNet2DModel  # type: ignore
 
 from models.scheduler import build_scheduler_from_config
 from utils.config import load_config
@@ -48,6 +49,30 @@ def find_latest_checkpoint(checkpoint_dir: Path) -> Path:
 
 
 
+def load_class_names(checkpoint_path : Path) -> list[str] | None:
+    class_names_path = checkpoint_path / "class_names.json"
+    if not class_names_path.exists():
+        return None
+    
+    with open(class_names_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    
+    return data["class_names"]
+
+
+
+def resolve_label_to_index(label: str, class_names: list[str]) -> int:
+    for index, class_name in enumerate(class_names):
+        if class_name.lower() == label.lower():
+            return index
+    
+    raise ValueError(
+        f"Unknown label: {label}.\n"
+        f"Available labels: {class_names}"
+    )
+
+
+
 def denormalize(image_tensor: torch.Tensor) -> torch.Tensor:
     image_tensor = (image_tensor / 2.0) + 0.5
     image_tensor = image_tensor.clamp(0.0, 1.0)
@@ -65,7 +90,10 @@ def generate_batch(
         in_channels: int,
         num_inference_steps: int,
         device: torch.device,
-        generator: torch.Generator | None
+        generator: torch.Generator | None,
+        class_index: int | None = None,
+        null_class_index: int | None = None,
+        guidance_scale: float = 1.0
     ) -> torch.Tensor:
     model.eval()
     
@@ -80,8 +108,30 @@ def generate_batch(
     total_steps = len(noise_scheduler.timesteps)
     start_time = time.time()
     
+    conditional_labels = None
+    null_labels = None
+    
+    if class_index is not None:
+        conditional_labels = torch.full((batch_size,), class_index, device=device, dtype=torch.long)
+        
+        if guidance_scale > 1.0 and null_class_index is not None:
+            null_labels = torch.full((batch_size,), null_class_index, device=device, dtype=torch.long)
+    
+    
+    use_guidance = null_labels is not None
+    use_conditioning = conditional_labels is not None
+    
     for step_index, timestep in enumerate(noise_scheduler.timesteps):
-        noise_prediction = model(image, timestep).sample
+        if use_guidance:
+            #Classifier-Free Guidance
+            conditional_prediction = model(image, timestep, class_labels=conditional_labels).sample
+            unconditional_prediction = model(image,timestep, class_labels=null_labels).sample
+            noise_prediction = unconditional_prediction + guidance_scale * (conditional_prediction - unconditional_prediction)
+        elif use_conditioning:
+            noise_prediction = model(image, timestep, class_labels=conditional_labels).sample
+        else:
+            noise_prediction = model(image, timestep).sample
+        
         
         image = noise_scheduler.step(noise_prediction, timestep, image).prev_sample
         
@@ -133,7 +183,7 @@ def save_grid(images: torch.Tensor, output_path: Path) -> None:
     columns = math.ceil(math.sqrt(image_count))
     rows = math.ceil(image_count / columns)
     
-    figure, axes = plt.subplots(rows, columns, figsize=(3 * columns, 3 * rows))
+    _figure, axes = plt.subplots(rows, columns, figsize=(3 * columns, 3 * rows))
     
     
     if image_count == 1:
@@ -168,6 +218,9 @@ def main():
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--device", default=None)
     parser.add_argument("--output-dir", default=None)
+    parser.add_argument("--label", default=None)
+    parser.add_argument("--guidance-scale", type=float, default=None)
+    parser.add_argument("--list-labels", action="store_true")
     args = parser.parse_args()
     
     config = load_config()
@@ -192,6 +245,27 @@ def main():
     image_size = config["data"]["image_size"]
     in_channels = config["model"]["in_channels"]
     device = resolve_device(device_setting)
+    guidance_scale = resolve(args.guidance_scale, config["conditional"]["guidance_scale"])
+    class_names = load_class_names(checkpoint_path)
+    
+    if args.list_labels:
+        if class_names is None:
+            print(f"This checkpoint is unconditional (no class_names.json): {checkpoint_path}")
+        else:
+            print(f"Available classes in checkpoint: {checkpoint_path}")
+            for index, class_name in enumerate(class_names):
+                print(f"    [{index}] {class_name}")
+        return
+    
+    
+    class_index = None
+    null_class_index = None
+    
+    if args.label is not None:
+        if class_names is None:
+            raise ValueError("--label used, but this checkpoint is unconditional.")
+        class_index = resolve_label_to_index(args.label, class_names)
+        null_class_index = len(class_names)
     
     
     print("=== Image Generation ===")
@@ -204,6 +278,12 @@ def main():
         print(f"    Seed:               {seed}")
     else:
         print("    Seed:               not defined")
+        
+    if class_index is not None:
+        print(f"    Category:           {args.label} (index: {class_index})")
+        print(f"    Guidance Scale:     {guidance_scale}")
+    elif class_names is not None:
+        print("    Category:           not set")
     print(f"    Output directory    {output_dir}")
     
     
@@ -241,6 +321,9 @@ def main():
             num_inference_steps=num_inference_steps,
             device=device,
             generator=generator,
+            class_index=class_index,
+            null_class_index=null_class_index,
+            guidance_scale=guidance_scale
         )
         
         all_images.append(batch_images.cpu())

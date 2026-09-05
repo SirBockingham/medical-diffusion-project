@@ -96,9 +96,11 @@ class MedicalImageDataset(Dataset):
         labels: list[str] | None = None,
         allowed_filenames: set | None = None,
         augment: bool = False,
+        single_label_only: bool = False
     ):
         self.images_dir = Path(images_dir)
         self.image_size = image_size
+        self.single_label_only = single_label_only
         
         filename_to_path = build_filename_index(self.images_dir)
         
@@ -119,6 +121,18 @@ class MedicalImageDataset(Dataset):
             self.label_to_idx[label] = index
         
         
+        no_finding_class_name = no_finding_value if no_finding_value is not None else "No Finding"
+        self.class_names = list(self.labels) + [no_finding_class_name]
+        self.no_finding_class_index = len(self.labels)
+        
+        self.null_class_index = len(self.class_names)
+        self.num_class_embeds = len(self.class_names) + 1
+        
+        self.class_neme_to_index = {}
+        for index, class_name in enumerate(self.class_names):
+            self.class_neme_to_index[class_name] = index
+            
+        
         self.samples = []
         
         for row in rows:
@@ -130,15 +144,33 @@ class MedicalImageDataset(Dataset):
             full_path = filename_to_path.get(filename)
             raw_label_value = row.get(label_col, "")
             parsed_labels = _parse_label_string(raw_label_value, label_separator, no_finding_value)
+            
+            
+            known_labels_for_sample = []
+            for label in parsed_labels:
+                if label in self.label_to_idx:
+                    known_labels_for_sample.append(label)
+                    
+            if len(known_labels_for_sample) == 0:
+                class_index = self.no_finding_class_index
+            elif len(known_labels_for_sample) == 1:
+                class_index = self.label_to_idx[known_labels_for_sample[0]]
+            else:
+                if single_label_only:
+                    continue
+                class_index = self.label_to_idx[known_labels_for_sample[0]]
 
             self.samples.append({
                 "filename": filename,
                 "path": full_path,
                 "labels": parsed_labels,
+                "class_index": class_index,
                 "patient_id": row.get(patient_id_col)
             })
         
         print(f"{len(self.samples)} samples loaded, {len(self.labels)} unique labels loaded")
+        if single_label_only:
+            print(f"    -> conditional mode: {len(self.class_names)} classes + 1 null token")
         
         # Image transformations
         transform_steps: list[Callable] = [T.Resize((image_size, image_size))]
@@ -179,6 +211,7 @@ class MedicalImageDataset(Dataset):
         return {
             "image": image_tensor,
             "labels": label_vector,
+            "class_index": sample["class_index"],
             "label_names": sample["labels"],
             "filename": sample["filename"],
             "patient_id": sample["patient_id"],

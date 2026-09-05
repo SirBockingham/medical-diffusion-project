@@ -1,4 +1,5 @@
 import argparse
+import json
 import sys
 import time
 from pathlib import Path
@@ -13,6 +14,7 @@ sys.path.insert(0, str(SRC_DIR))
 from diffusers import DDPMScheduler, UNet2DModel  # type: ignore
 
 from data.data_loading import build_dataloaders_from_config
+from data.dataset import MedicalImageDataset
 from models.scheduler import build_scheduler_from_config
 from models.unet import build_unet_from_config, count_parameters
 from utils.config import load_config
@@ -32,7 +34,8 @@ def save_checkpoint(
         checkpoint_dir: Path,
         epoch: int,
         model: UNet2DModel,
-        optimizer: torch.optim.Optimizer
+        optimizer: torch.optim.Optimizer,
+        class_names: list[str] | None = None
     ) -> Path:
     
     epoch_dir = checkpoint_dir / f"epoch_{epoch:03d}"
@@ -46,6 +49,11 @@ def save_checkpoint(
         "optimizer_state_dict": optimizer.state_dict()
     }
     torch.save(training_state, epoch_dir / "training_state.pt")
+    
+    if class_names is not None:
+        class_names_path = epoch_dir / "class_names.json"
+        with open(class_names_path, "w", encoding="utf-8") as f:
+            json.dump({"class_names": class_names}, f, ensure_ascii=False, indent=2)
     
     return epoch_dir
 
@@ -88,7 +96,10 @@ def train_one_epoch(
         max_grad_norm: float,
         log_every_n_steps: int,
         max_batches: int,
-        epoch: int
+        epoch: int,
+        conditional: bool = False,
+        label_dropout_chance: float = 0.0,
+        null_class_index: int = 0
     ) -> float:
     
     model.train()
@@ -115,7 +126,22 @@ def train_one_epoch(
         
         noisy_images = noise_scheduler.add_noise(clean_images, noise, timesteps)
         
-        noise_prediction = model(noisy_images, timesteps).sample
+        
+        if conditional:
+            class_labels = batch["class_index"].to(device)
+            
+            if label_dropout_chance > 0:
+                dropout_mask = torch.rand(class_labels.shape, device=device) < label_dropout_chance
+                class_labels = torch.where(
+                    dropout_mask,
+                    torch.full_like(class_labels, null_class_index),
+                    class_labels
+                )
+                
+            noise_prediction = model(noisy_images, timesteps, class_labels=class_labels).sample
+        else:
+            noise_prediction = model(noisy_images, timesteps).sample
+        
         
         loss = F.mse_loss(noise_prediction, noise)
         
@@ -151,7 +177,8 @@ def evaluate(
         dataloader: DataLoader,
         device: torch.device,
         num_train_timesteps: int,
-        max_batches: int
+        max_batches: int,
+        conditional: bool = False
     ) -> float:
     
     model.eval()
@@ -184,8 +211,16 @@ def evaluate(
                                     ).long()
         
         noisy_images = noise_scheduler.add_noise(clean_images, noise, timesteps)
-        noise_perdiction = model(noisy_images, timesteps).sample
-        loss = F.mse_loss(noise_perdiction, noise)
+        
+        
+        if conditional:
+            class_labels = batch["class_index"].to(device)
+            noise_prediction = model(noisy_images, timesteps, class_labels=class_labels).sample
+        else:
+            noise_prediction = model(noisy_images, timesteps).sample
+            
+            
+        loss = F.mse_loss(noise_prediction, noise)
         
         total_loss += loss.item()
         batch_count += 1
@@ -226,6 +261,10 @@ def main():
     num_train_timesteps = config["scheduler"]["num_train_timesteps"]
     checkpoint_dir = config["paths"]["checkpoints"]
     
+    conditional = config["conditional"]["enabled"]
+    label_dropout_chance = config["conditional"]["label_droupout_chance"]
+    
+    
     device = resolve_device(device_setting)
     
     
@@ -236,13 +275,28 @@ def main():
     print(f"    Number of epochs:   {epochs}")
     print(f"    Learning rate:      {learning_rate}")
     print(f"    Checkpoint dir:     {checkpoint_dir}")
+    if conditional:
+        print(f"    Mode:               conditional (label_dropout: {label_dropout_chance})")
+    else:
+        print("    Mode:               unconditional")
     
     print("\n--- Building dataloaders ---")
     dataloaders = build_dataloaders_from_config(config)
     
     
+    train_dataset: MedicalImageDataset = dataloaders["train"].dataset # type: ignore
+    if conditional:
+        num_class_embeds = train_dataset.num_class_embeds
+        class_names = train_dataset.class_names
+        null_class_index = train_dataset.null_class_index
+    else:
+        num_class_embeds = None
+        class_names = None
+        null_class_index = 0
+    
+    
     print("\n--- Building model and scheduler ---")
-    model = build_unet_from_config(config)
+    model = build_unet_from_config(config, num_class_embeds=num_class_embeds)
     model.to(device) # type: ignore
     noise_scheduler = build_scheduler_from_config(config)
     
@@ -278,7 +332,10 @@ def main():
             max_grad_norm=max_grad_norm,
             log_every_n_steps=log_every_n_steps,
             max_batches=max_batches_per_epoch,
-            epoch=epoch
+            epoch=epoch,
+            conditional=conditional,
+            label_dropout_chance=label_dropout_chance,
+            null_class_index=null_class_index
         )
         
         val_loss = evaluate(
@@ -287,7 +344,8 @@ def main():
             dataloader=dataloaders["val"],
             device=device,
             num_train_timesteps=num_train_timesteps,
-            max_batches=max_batches_per_epoch
+            max_batches=max_batches_per_epoch,
+            conditional=conditional
         )
         
         
@@ -302,7 +360,7 @@ def main():
         is_last_epoch = epoch == epochs
         
         if is_sceduled_save or is_last_epoch:
-            saved_path = save_checkpoint(checkpoint_dir, epoch, model, optimizer)
+            saved_path = save_checkpoint(checkpoint_dir, epoch, model, optimizer, class_names=class_names)
             print(f"    Checkpoint saved to: {saved_path}")
             
     print("\n--- Training finished ---")

@@ -15,6 +15,11 @@ from utils.config import load_config
 def collate_batch(batch: list[dict]) -> dict:
     images = torch.stack([sample["image"] for sample in batch])
     labels = torch.stack([sample["labels"] for sample in batch])
+    
+    class_indices = torch.tensor(
+        [sample["class_index"] for sample in batch],
+        dtype=torch.long
+    )
  
     label_names = [sample["label_names"] for sample in batch]
     filenames = [sample["filename"] for sample in batch]
@@ -24,6 +29,7 @@ def collate_batch(batch: list[dict]) -> dict:
     return {
         "image": images,
         "labels": labels,
+        "class_index": class_indices,
         "label_names": label_names,
         "filename": filenames,
         "patient_id": patient_ids,
@@ -45,7 +51,8 @@ def build_datasets(
         csv_path: str,
         img_dir: str,
         splits_dir: str,
-        img_size: int = 256
+        img_size: int = 256,
+        single_label_only: bool = False
     ) -> dict[str, MedicalImageDataset]:
     
     splits_dir_path = Path(splits_dir)
@@ -63,6 +70,7 @@ def build_datasets(
         allowed_filenames=train_filenames,
         image_size=img_size,
         augment=True,
+        single_label_only=single_label_only
     )
     
     print("\nLoading validation dataset with train label order...")
@@ -72,7 +80,8 @@ def build_datasets(
         allowed_filenames=val_filenames,
         image_size=img_size,
         labels=train_dataset.labels,
-        augment=False
+        augment=False,
+        single_label_only=single_label_only
     )
     
     print("\nLoading validation dataset with train label order...")
@@ -82,7 +91,8 @@ def build_datasets(
         allowed_filenames=test_filenames,
         image_size=img_size,
         labels=train_dataset.labels,
-        augment=False
+        augment=False,
+        single_label_only=single_label_only
     )
     
     
@@ -98,11 +108,14 @@ def build_datasets_from_config(config: dict | None = None) -> dict[str, MedicalI
     if config is None:
         config = load_config()
         
+    single_label_only = config["conditional"]["enabled"]
+        
     return build_datasets(
         csv_path=str(config["paths"]["csv_path"]),
         img_dir=str(config["paths"]["data_raw"]),
         splits_dir=str(config["paths"]["data_splits"]),
-        img_size=config["data"]["image_size"]
+        img_size=config["data"]["image_size"],
+        single_label_only=single_label_only
     )
     
     
@@ -114,13 +127,15 @@ def build_dataloaders(
         img_size: int = 256,
         batch_size: int = 16,
         num_workers: int = 4,
+        single_label_only: bool = False
     ) -> dict[str, DataLoader]:
     
     datasets = build_datasets(
         csv_path=csv_path,
         img_dir=img_dir,
         splits_dir=splits_dir,
-        img_size=img_size
+        img_size=img_size,
+        single_label_only=single_label_only
     )
     
     train_loader = DataLoader(
@@ -160,13 +175,16 @@ def build_dataloaders_from_config(config: dict | None = None) -> dict[str, DataL
     if config is None:
         config = load_config()
         
+    single_label_only = config["conditional"]["enabled"]
+        
     return build_dataloaders(
         csv_path=str(config["paths"]["csv_path"]),
         img_dir=str(config["paths"]["data_raw"]),
         splits_dir=str(config["paths"]["data_splits"]),
         img_size=config["data"]["image_size"],
         batch_size=config["data"]["batch_size"],
-        num_workers=config["data"]["num_workers"]
+        num_workers=config["data"]["num_workers"],
+        single_label_only=single_label_only
     )
     
     
