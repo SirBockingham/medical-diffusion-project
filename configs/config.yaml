@@ -15,9 +15,9 @@ paths:
 
 
 data:
-  image_size: 128
-  batch_size: 16
-  num_workers: 8
+  image_size: 64
+  batch_size: 64
+  num_workers: 4
   train_ratio: 0.7
   val_ratio: 0.15
   test_ratio: 0.15
@@ -28,15 +28,15 @@ model:
   in_channels: 3
   out_channels: 3
   layers_per_block: 2
-  block_out_channels: [64, 128, 128, 256]
+  block_out_channels: [128, 256, 256, 256]
   down_block_types: 
     - "DownBlock2D"
     - "DownBlock2D"
-    - "DownBlock2D"
     - "AttnDownBlock2D"
+    - "DownBlock2D"
   up_block_types: 
-    - "AttnUpBlock2D"
     - "UpBlock2D"
+    - "AttnUpBlock2D"
     - "UpBlock2D"
     - "UpBlock2D"
 
@@ -53,13 +53,17 @@ scheduler:
 
 training:
   epochs: 50
-  learning_rate: 0.0001
+  learning_rate: 0.0002
   weight_decay: 0.01
   max_grad_norm: 1.0
   device: "auto"
   save_every_n_epochs: 5
   log_every_n_steps: 50
   max_batches_per_epoch: 0
+  use_ema: true
+  ema_decay: 0.999
+  ema_warmup_steps: 1000
+  lr_warmup_steps: 500
 
 
 

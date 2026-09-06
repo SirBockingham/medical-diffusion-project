@@ -56,7 +56,7 @@ def group_filenames_by_patient(
     patient_id_col: str,
     label_col: str,
     label_separator: str,
-    no_finding_value: str | None
+    no_finding_value: str
 ) -> dict[str, list[str]]:
     patient_to_filenames = defaultdict(list)
     for row in rows:
@@ -105,7 +105,7 @@ def split_patients_per_label(
     
     train_patients = shuffled_patients[:train_count]
     val_patients = shuffled_patients[train_count:train_count + val_count]
-    test_patients = shuffled_patients[val_count:]
+    test_patients = shuffled_patients[train_count + val_count:]
 
 
     return {
@@ -135,7 +135,7 @@ def print_label_distribution(split_name: str, filenames: list[str], filename_to_
     print(f"\n {split_name} label distribution {len(filenames)} images:")
     for label, count in sorted(label_counter.items()):
         percent = 100 * count / len(filenames) if filenames else 0
-        print(f"    {label:25s} {count:6d} kep ({percent:.1f}%)")
+        print(f"    {label:25s} {count:6d} images ({percent:.1f}%)")
         
 
 
@@ -162,7 +162,11 @@ def main():
             return cli_value if cli_value is not None else config_value
         
     
-    csv_path = resolve(Path(args.csv), config["paths"]["csv_path"])
+    if args.csv is not None:
+        csv_path = Path(args.csv)
+    else:
+        csv_path = config["paths"]["csv_path"]
+        
     train_ratio = resolve(args.train_ratio, config["data"]["train_ratio"])
     val_ratio = resolve(args.val_ratio, config["data"]["val_ratio"])
     test_ratio = resolve(args.test_ratio, config["data"]["test_ratio"])

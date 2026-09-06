@@ -128,9 +128,9 @@ class MedicalImageDataset(Dataset):
         self.null_class_index = len(self.class_names)
         self.num_class_embeds = len(self.class_names) + 1
         
-        self.class_neme_to_index = {}
+        self.class_name_to_index = {}
         for index, class_name in enumerate(self.class_names):
-            self.class_neme_to_index[class_name] = index
+            self.class_name_to_index[class_name] = index
             
         
         self.samples = []

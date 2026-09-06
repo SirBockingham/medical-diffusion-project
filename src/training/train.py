@@ -12,6 +12,8 @@ SRC_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SRC_DIR))
 
 from diffusers import DDPMScheduler, UNet2DModel  # type: ignore
+from diffusers.optimization import get_cosine_schedule_with_warmup
+from diffusers.training_utils import EMAModel
 
 from data.data_loading import build_dataloaders_from_config
 from data.dataset import MedicalImageDataset
@@ -35,19 +37,35 @@ def save_checkpoint(
         epoch: int,
         model: UNet2DModel,
         optimizer: torch.optim.Optimizer,
-        class_names: list[str] | None = None
+        class_names: list[str] | None = None,
+        ema_model: EMAModel | None = None
     ) -> Path:
     
     epoch_dir = checkpoint_dir / f"epoch_{epoch:03d}"
     epoch_dir.mkdir(parents=True, exist_ok=True)
     
-    model.save_pretrained(str(epoch_dir))
+    
+    if ema_model is not None:
+        ema_model.store(model.parameters())
+        ema_model.copy_to(model.parameters())
+        model.save_pretrained(str(epoch_dir))
+        ema_model.restore(model.parameters())
+        
+        raw_weights_dir = epoch_dir / "raw_weights"
+        raw_weights_dir.mkdir(parents=True, exist_ok=True)
+        model.save_pretrained(str(raw_weights_dir))
+    else:
+        model.save_pretrained(str(epoch_dir))
     
     
     training_state = {
         "epoch": epoch,
         "optimizer_state_dict": optimizer.state_dict()
     }
+    
+    if ema_model is not None:
+        training_state["ema_state_dict"] = ema_model.state_dict()
+        
     torch.save(training_state, epoch_dir / "training_state.pt")
     
     if class_names is not None:
@@ -62,12 +80,19 @@ def save_checkpoint(
 def load_checkpoint(
         checkpoint_path: Path,
         model: UNet2DModel,
-        optimizer: torch.optim.Optimizer
+        optimizer: torch.optim.Optimizer,
+        ema_model: EMAModel | None = None
     ) -> int:
     
     if not checkpoint_path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
     
+    
+    raw_weights_dir = checkpoint_path / "raw_weights"
+    if raw_weights_dir.exists():
+        weights_source = raw_weights_dir
+    else:
+        weights_source = checkpoint_path
     
     loaded_model = UNet2DModel.from_pretrained(str(checkpoint_path))
     model.load_state_dict(loaded_model.state_dict())
@@ -77,8 +102,14 @@ def load_checkpoint(
         training_state = torch.load(training_state_path, map_location="cpu")
         optimizer.load_state_dict(training_state["optimizer_state_dict"])
         completed_epoch = training_state["epoch"]
+        
+        if ema_model is not None:
+            if "ema_state_dict" in training_state:
+                ema_model.load_state_dict(training_state["ema_state_dict"])
+            else:
+                print("Warning: checkpoint does not contain EMA state! EMA starting from current weights.")
     else:
-        print("Warning: no training.pt found in the checkpoint. Epoch starting from zero.")
+        print("Warning: no training.pt found in the checkpoint! Epoch starting from zero.")
         completed_epoch = 0
         
         
@@ -99,7 +130,9 @@ def train_one_epoch(
         epoch: int,
         conditional: bool = False,
         label_dropout_chance: float = 0.0,
-        null_class_index: int = 0
+        null_class_index: int = 0,
+        ema_model: EMAModel | None = None,
+        lr_scheduler = None
     ) -> float:
     
     model.train()
@@ -153,13 +186,21 @@ def train_one_epoch(
             
         optimizer.step()
         
+        if lr_scheduler is not None:
+            lr_scheduler.step()
+            
+        if ema_model is not None:
+            ema_model.step(model.parameters())
+        
         total_loss += loss.item()
         batch_count += 1
         
         if log_every_n_steps > 0 and batch_index % log_every_n_steps == 0:
             elapsed_seconds = time.time() - epoch_start_time
+            current_lr = optimizer.param_groups[0]["lr"]
             print(f"    [epoch {epoch}] batch {batch_index:5d}  "
-                  f"loss: {loss.item():.4f}  ({elapsed_seconds:.1f}s)")
+                  f"loss: {loss.item():.4f}     lr: {current_lr:.2e}  "
+                  f"({elapsed_seconds:.1f}s)")
             
     
     if batch_count == 0:
@@ -178,10 +219,15 @@ def evaluate(
         device: torch.device,
         num_train_timesteps: int,
         max_batches: int,
-        conditional: bool = False
+        conditional: bool = False,
+        ema_model: EMAModel | None = None
     ) -> float:
     
     model.eval()
+    
+    if ema_model is not None:
+        ema_model.store(model.parameters())
+        ema_model.copy_to(model.parameters())
     
     generator = torch.Generator(device=device)
     generator.manual_seed(0)
@@ -224,6 +270,9 @@ def evaluate(
         
         total_loss += loss.item()
         batch_count += 1
+    
+    if ema_model is not None:
+        ema_model.restore(model.parameters())
         
     if batch_count == 0:
         return 0.0
@@ -262,8 +311,12 @@ def main():
     checkpoint_dir = config["paths"]["checkpoints"]
     
     conditional = config["conditional"]["enabled"]
-    label_dropout_chance = config["conditional"]["label_droupout_chance"]
+    label_dropout_chance = config["conditional"]["label_dropout_chance"]
     
+    use_ema = training_config["use_ema"]
+    ema_decay = training_config["ema_decay"]
+    ema_warmup_steps = training_config["ema_warmup_steps"]
+    lr_warmup_steps = training_config["lr_warmup_steps"]
     
     device = resolve_device(device_setting)
     
@@ -279,6 +332,12 @@ def main():
         print(f"    Mode:               conditional (label_dropout: {label_dropout_chance})")
     else:
         print("    Mode:               unconditional")
+    if use_ema:
+        print(f"    EMA:                on (decay: {ema_decay})")
+    else:
+        print("     EMA:                off")
+    if lr_warmup_steps > 0:
+        print(f"    LR warmup:          {lr_warmup_steps} steps + cosine decay")
     
     print("\n--- Building dataloaders ---")
     dataloaders = build_dataloaders_from_config(config)
@@ -309,11 +368,38 @@ def main():
         weight_decay=weight_decay
     )
     
+    if use_ema:
+        ema_model = EMAModel(
+            model.parameters(),
+            decay=ema_decay,
+            use_ema_warmup=True,
+            inv_gamma=1.0,
+            power=3.0 / 4.0,
+            model_cls=UNet2DModel,
+            model_config=model.config,
+        )
+    else:
+        ema_model = None
+        
+    batches_per_epoch = len(dataloaders["train"])
+    if max_batches_per_epoch > 0:
+        batches_per_epoch = min(batches_per_epoch, max_batches_per_epoch)
+    total_training_steps = batches_per_epoch * epochs
+ 
+    if lr_warmup_steps > 0:
+        lr_scheduler = get_cosine_schedule_with_warmup(
+            optimizer=optimizer,
+            num_warmup_steps=lr_warmup_steps,
+            num_training_steps=total_training_steps,
+        )
+    else:
+        lr_scheduler = None
+        
     
     start_epoch = 1
     if args.resume_from is not None:
         resume_path = Path(args.resume_from)
-        completed_epoch = load_checkpoint(resume_path, model, optimizer)
+        completed_epoch = load_checkpoint(resume_path, model, optimizer, ema_model)
         start_epoch = completed_epoch + 1
         print(f"Resuming training after epoch {start_epoch}, from: {resume_path}")
         
@@ -335,7 +421,9 @@ def main():
             epoch=epoch,
             conditional=conditional,
             label_dropout_chance=label_dropout_chance,
-            null_class_index=null_class_index
+            null_class_index=null_class_index,
+            ema_model=ema_model,
+            lr_scheduler=lr_scheduler
         )
         
         val_loss = evaluate(
@@ -345,7 +433,8 @@ def main():
             device=device,
             num_train_timesteps=num_train_timesteps,
             max_batches=max_batches_per_epoch,
-            conditional=conditional
+            conditional=conditional,
+            ema_model=ema_model
         )
         
         
@@ -360,7 +449,7 @@ def main():
         is_last_epoch = epoch == epochs
         
         if is_sceduled_save or is_last_epoch:
-            saved_path = save_checkpoint(checkpoint_dir, epoch, model, optimizer, class_names=class_names)
+            saved_path = save_checkpoint(checkpoint_dir, epoch, model, optimizer, class_names=class_names, ema_model=ema_model)
             print(f"    Checkpoint saved to: {saved_path}")
             
     print("\n--- Training finished ---")

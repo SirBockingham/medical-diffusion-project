@@ -84,7 +84,7 @@ def build_datasets(
         single_label_only=single_label_only
     )
     
-    print("\nLoading validation dataset with train label order...")
+    print("\nLoading test dataset with train label order...")
     test_dataset = MedicalImageDataset(
         csv_path=csv_path,
         images_dir=img_dir,
