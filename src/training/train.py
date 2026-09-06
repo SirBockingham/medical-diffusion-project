@@ -315,7 +315,6 @@ def main():
     
     use_ema = training_config["use_ema"]
     ema_decay = training_config["ema_decay"]
-    ema_warmup_steps = training_config["ema_warmup_steps"]
     lr_warmup_steps = training_config["lr_warmup_steps"]
     
     device = resolve_device(device_setting)
