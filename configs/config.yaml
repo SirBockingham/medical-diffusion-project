@@ -80,4 +80,13 @@ generation:
 
 
 
+evaluation:
+  num_samples: 2000
+  batch_size: 16
+  num_inference_steps: 200
+  per_class: true
+  per_class_num_samples: 500
+
+
+
 seed: 47

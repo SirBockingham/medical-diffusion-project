@@ -66,6 +66,7 @@ def load_config(config_path: str | Path | None = None) -> dict[str, Any]:
     resolved_config["training"] = raw_config["training"]
     resolved_config["generation"] = raw_config["generation"]
     resolved_config["conditional"] = raw_config["conditional"]
+    resolved_config["evaluation"] = raw_config["evaluation"]
     
     metadata_dir = resolved_config["paths"]["data_metadata"]
     csv_filename = raw_config["paths"]["csv_filename"]
