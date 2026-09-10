@@ -404,6 +404,7 @@ def main():
         
     
     print("\n--- Training cycle ---")
+    training_start = time.time()
     for epoch in range(start_epoch, epochs + 1):
         epoch_start_time = time.time()
         
@@ -451,7 +452,7 @@ def main():
             saved_path = save_checkpoint(checkpoint_dir, epoch, model, optimizer, class_names=class_names, ema_model=ema_model)
             print(f"    Checkpoint saved to: {saved_path}")
             
-    print("\n--- Training finished ---")
+    print(f"\n--- Training finished in {time.time() - training_start:.1f}s ---")
     
     
 

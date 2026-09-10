@@ -342,7 +342,7 @@ def main():
     save_grid(generated_images, grid_path)
     print(f"    Grid summary: {grid_path}")
     
-    print(f"\n Completed in {total_duration:.1f}s")
+    print(f"\n Generation completed in {total_duration:.1f}s")
     
     
     

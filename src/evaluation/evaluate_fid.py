@@ -315,7 +315,9 @@ def main():
             if class_fid is not None:
                 print(f"     FID: {class_fid:.2f}   ({time.time() - class_start:.0f}s)")
                 
-    print(f"\nCompleted in {time.time() - overall_start:.0f}s")
+    
+    print(f"\nEvaluation completed in {time.time() - overall_start:.0f}s")
+    
     
     # Summary
     print("\n=== Results ===")
