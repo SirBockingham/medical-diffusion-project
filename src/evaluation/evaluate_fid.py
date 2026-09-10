@@ -141,7 +141,8 @@ def compute_fid(
         device: torch.device,
         class_index: int | None = None,
         null_class_index: int | None = None,
-        guidance_scale: float = 1.0
+        guidance_scale: float = 1.0,
+        real_class_filter: int | None = None,
 ) -> float | None:
     fid_metric = FrechetInceptionDistance(feature=2048, normalize=False).to(device)
     
@@ -151,7 +152,7 @@ def compute_fid(
         num_samples=num_samples,
         device=device,
         fid_metric=fid_metric,
-        class_index_filter=class_index
+        class_index_filter=real_class_filter
     )
     print(f"    {real_count} real images processed")
     
@@ -203,8 +204,8 @@ def main():
         return cli_value if cli_value is not None else config_value
     
     num_samples = resolve(args.num_samples, evaluation_config["num_samples"])
-    batch_size = resolve(args.batch_size, evaluation_config("batch_size"))
-    num_inference_steps = resolve(args.num_inference_steps, evaluation_config("num_inference_steps"))
+    batch_size = resolve(args.batch_size, evaluation_config["batch_size"])
+    num_inference_steps = resolve(args.num_inference_steps, evaluation_config["num_inference_steps"])
     guidance_scale = resolve(args.guidance_scale, config["conditional"]["guidance_scale"])
     device_setting = resolve(args.device, config["training"]["device"])
     
@@ -259,6 +260,11 @@ def main():
     print("\n--- Overall FID ---")
     overall_start = time.time()
     
+    if is_conditional:
+        overall_class_index = null_class_index
+    else:
+        overall_class_index = None
+    
     overall_fid = compute_fid(
         model=model,
         noise_scheduler=noise_scheduler,
@@ -269,7 +275,7 @@ def main():
         in_channels=in_channels,
         num_inference_steps=num_inference_steps,
         device=device,
-        class_index=None,
+        class_index=overall_class_index,
         null_class_index=None,
         guidance_scale=1.0
     )
@@ -301,13 +307,15 @@ def main():
                 device=device,
                 class_index=class_index,
                 null_class_index=null_class_index,
-                guidance_scale=guidance_scale
+                guidance_scale=guidance_scale,
+                real_class_filter=class_index
             )
-            results["class_name"] = class_fid
+            results[class_name] = class_fid
             
             if class_fid is not None:
                 print(f"     FID: {class_fid:.2f}   ({time.time() - class_start:.0f}s)")
                 
+    print(f"\nCompleted in {time.time() - overall_start:.0f}s")
     
     # Summary
     print("\n=== Results ===")
