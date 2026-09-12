@@ -9,13 +9,18 @@ import torch
 SRC_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SRC_DIR))
 
-from utils.config import load_config
+from diffusers import DDPMScheduler, UNet2DModel  # type: ignore
+
 from data.data_loading import build_dataloaders_from_config
+from generation.generate import (
+    check_checkpoint_compatibility,
+    denormalize,
+    find_latest_checkpoint,
+    generate_batch,
+    load_class_names,
+)
 from models.scheduler import build_scheduler_from_config
-
-from generation.generate import denormalize, find_latest_checkpoint, generate_batch, load_class_names
-
-from diffusers import UNet2DModel, DDPMScheduler # type: ignore
+from utils.config import load_config
 
 try:
     from torchmetrics.image.fid import FrechetInceptionDistance
@@ -221,6 +226,9 @@ def main():
     in_channels = config["model"]["in_channels"]
     device = resolve_device(device_setting)
     
+    if not check_checkpoint_compatibility(checkpoint_path, config):
+        return
+    
     class_names = load_class_names(checkpoint_path)
     is_conditional = class_names is not None
     
@@ -241,7 +249,7 @@ def main():
     # Loading model, scheduler, building data loader
     print("\n--- Loading ---")
     model = UNet2DModel.from_pretrained(str(checkpoint_path))
-    model.to(device)
+    model.to(device) # type: ignore
     model.eval()
     
     noise_scheduler = build_scheduler_from_config(config)
@@ -343,7 +351,7 @@ def main():
         }
         
         with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(output_path, f, ensure_ascii=False, indent=2)
+            json.dump(output_data, f, ensure_ascii=False, indent=2)
             
         print(f"\nResults saved to: {output_path}")
         

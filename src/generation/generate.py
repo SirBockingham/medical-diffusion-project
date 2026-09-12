@@ -28,25 +28,101 @@ def resolve_device(device_setting: str) -> torch.device:
 
 
 
-def find_latest_checkpoint(checkpoint_dir: Path) -> Path:
-    if not checkpoint_dir.exists():
+def find_latest_checkpoint(checkpoint_root: Path) -> Path:
+    if not checkpoint_root.exists():
         raise FileNotFoundError(
-            f"Checkpoint folder not found: {checkpoint_dir}"
+            f"Checkpoint folder not found: {checkpoint_root}"
         )
         
-    checkpoint_folders = []
-    for item in checkpoint_dir.iterdir():
-        if item.is_dir() and item.name.startswith("epoch_"):
-            checkpoint_folders.append(item)
-            
-    if len(checkpoint_folders) == 0:
-        raise FileNotFoundError(
-            f"No checkpoints found in: {checkpoint_dir}"
+        
+    run_folders = sorted(
+        [item for item in checkpoint_root.iterdir()
+         if item.is_dir() and item.name.startswith("epoch_")],
+        key=lambda folder: folder.name
+    )
+    
+    for run_folder in reversed(run_folders):
+        epoch_folders = sorted(
+            [item for item in checkpoint_root.iterdir()
+             if item.is_dir() and item.name.startswith("epoch_")],
+            key=lambda folder: folder.name
         )
         
-    checkpoint_folders.sort(key=lambda folder: folder.name)
-    return checkpoint_folders[-1]
+        if epoch_folders:
+            return epoch_folders[-1]
+        
+    
+    raise FileNotFoundError(f"No checkpoints found in: {checkpoint_root}")
 
+
+
+def load_run_info(checkpoint_path: Path) -> dict | None:
+    run_info_path = checkpoint_path.parent / "run_info.json"
+    if not run_info_path.exists():
+        return
+    
+    with open(run_info_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+    
+    
+    
+def check_checkpoint_compatibility(checkpoint_path: Path, config: dict) -> bool:
+    run_info = load_run_info(checkpoint_path)
+    if run_info is None:
+        return True
+    
+    warnings = []
+    
+    current_image_size = config["data"]["image_size"]
+    if run_info.get("image_size") != current_image_size:
+        warnings.append(
+            f"image_size: checkpoint is {run_info.get("image_size")}, "
+            f"config.yaml is {current_image_size}"
+        )
+
+    current_conditional = config["conditional"]["enabled"]
+    if run_info.get("conditional") != current_conditional:
+        warnings.append(
+            f"conditional: checkpoint is {run_info.get("conditional")}, "
+            f"config.yaml is {current_conditional}"
+        )
+        
+    current_prediction_type = config["scheduler"]["prediction_type"]
+    if run_info.get("prediction_type") != current_prediction_type:
+        warnings.append(
+            f"prediction_type: checkpoint is {run_info.get("prediction_type")}, "
+            f"config.yaml is {current_prediction_type}"
+        )
+        
+    current_beta_schedule = config["scheduler"]["beta_schedule"]
+    if run_info.get("beta_schedule") != current_beta_schedule:
+        warnings.append(
+            f"beta_schedule: checkpoint is {run_info.get("beta_schedule")}, "
+            f"config.yaml is {current_beta_schedule}"
+        )
+        
+    if not warnings:
+        return True
+        
+    print("WARNING: the checkpoint parameters don't match the config.yaml:")
+    for warning in warnings:
+        print(f"  - {warning}")
+    print("The models own setting apply, but the scheduler and image size are loaded from the condig.yaml. "
+            "This can result in errors or wrong results.")
+    
+    if not sys.stdin.isatty():
+        print("\nNot interactive run, aborted.")
+        print("If intentional, use --checkpoint argument, or adjust config.yaml to fit the checkpoint")
+        return False
+    
+    answer = input("\nProceed? (Y/N): ").strip().lower
+    if answer in ("y", "yes"):
+        print()
+        return True
+    
+    print("Aborted.")
+    return False
+        
 
 
 def load_class_names(checkpoint_path : Path) -> list[str] | None:
@@ -133,7 +209,7 @@ def generate_batch(
             noise_prediction = model(image, timestep).sample
         
         
-        image = noise_scheduler.step(noise_prediction, timestep, image).prev_sample
+        image = noise_scheduler.step(noise_prediction, timestep, image).prev_sample # type: ignore
         
         is_progress_step = step_index % max(1, total_steps // 10) == 0
         if is_progress_step:
@@ -246,6 +322,10 @@ def main():
     in_channels = config["model"]["in_channels"]
     device = resolve_device(device_setting)
     guidance_scale = resolve(args.guidance_scale, config["conditional"]["guidance_scale"])
+    
+    if not check_checkpoint_compatibility(checkpoint_path, config):
+        return
+    
     class_names = load_class_names(checkpoint_path)
     
     if args.list_labels:
@@ -289,7 +369,7 @@ def main():
     
     print("\n--- Loading Model ---")
     model = UNet2DModel.from_pretrained(str(checkpoint_path))
-    model.to(device)
+    model.to(device) # type: ignore
     
     noise_scheduler = build_scheduler_from_config(config)
     
