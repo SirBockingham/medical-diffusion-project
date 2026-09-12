@@ -32,6 +32,43 @@ def resolve_device(device_setting: str) -> torch.device:
 
 
 
+def create_run_directory(checkpint_dir: Path, config: dict) -> Path:
+    timestamp = time.strftime("%Y%m%d_%H%M")
+    
+    if config["conditional"]["enabled"]:
+        mode_tag = "cond"
+    else:
+        mode_tag = "uncond"
+        
+    image_size = config["data"]["image_size"]
+    run_name = f"{timestamp}_{mode_tag}_{image_size}"
+    
+    run_dir = checkpint_dir / run_name
+    run_dir.mkdir(parents=True, exist_ok=True)
+    
+    return run_dir
+
+
+
+def write_run_info(run_dir: Path, config: dict) -> None:
+    run_info = {
+        "image_size": config["data"]["image_size"],
+        "conditional": config["conditional"]["enabled"],
+        "num_train_timesteps": config["scheduler"]["num_train_timesteps"],
+        "beta_schedule": config["scheduler"]["beta_schedule"],
+        "prediction_type": config["scheduler"]["prediction_type"],
+        "block_out_channels": config["model"]["block_out_channels"],
+        "learning_rate": config["training"]["learning_rate"],
+        "batch_size": config["data"]["batch_size"],
+        "use_ema": config["training"]["use_ema"],
+        "started_at": time.strftime("%Y-%m-%d %H:%M:%S")
+    }
+    
+    with open(run_dir / "run_info.json", "w", encoding="utf-8") as f:
+        json.dump(run_info, f, ensure_ascii=False, indent=2)
+
+
+
 def save_checkpoint(
         checkpoint_dir: Path,
         epoch: int,
@@ -94,7 +131,7 @@ def load_checkpoint(
     else:
         weights_source = checkpoint_path
     
-    loaded_model = UNet2DModel.from_pretrained(str(checkpoint_path))
+    loaded_model = UNet2DModel.from_pretrained(str(weights_source))
     model.load_state_dict(loaded_model.state_dict())
     
     training_state_path = checkpoint_path / "training_state.pt"
@@ -157,7 +194,7 @@ def train_one_epoch(
                                         device=device
                                     ).long()
         
-        noisy_images = noise_scheduler.add_noise(clean_images, noise, timesteps)
+        noisy_images = noise_scheduler.add_noise(clean_images, noise, timesteps) # type: ignore
         
         
         if conditional:
@@ -256,7 +293,7 @@ def evaluate(
                                         generator=generator
                                     ).long()
         
-        noisy_images = noise_scheduler.add_noise(clean_images, noise, timesteps)
+        noisy_images = noise_scheduler.add_noise(clean_images, noise, timesteps) # type: ignore
         
         
         if conditional:
@@ -308,7 +345,7 @@ def main():
     save_every_n_epochs = training_config["save_every_n_epochs"]
     log_every_n_steps = training_config["log_every_n_steps"]
     num_train_timesteps = config["scheduler"]["num_train_timesteps"]
-    checkpoint_dir = config["paths"]["checkpoints"]
+    checkpoint_root = config["paths"]["checkpoints"]
     
     conditional = config["conditional"]["enabled"]
     label_dropout_chance = config["conditional"]["label_dropout_chance"]
@@ -318,6 +355,13 @@ def main():
     lr_warmup_steps = training_config["lr_warmup_steps"]
     
     device = resolve_device(device_setting)
+    
+    if args.resume_from is not None:
+        checkpoint_dir = Path(args.resume_from).resolve().parent
+        print(f"Continuing: saving into the existing run directory ({checkpoint_dir.name})")
+    else:
+        checkpoint_dir = create_run_directory(checkpoint_root, config)
+        write_run_info(checkpoint_dir, config)
     
     
     print("=== Training start ===")
