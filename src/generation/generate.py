@@ -3,6 +3,7 @@ import json
 import math
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -169,7 +170,8 @@ def generate_batch(
         generator: torch.Generator | None,
         class_index: int | None = None,
         null_class_index: int | None = None,
-        guidance_scale: float = 1.0
+        guidance_scale: float = 1.0,
+        progress_callback: Callable[[int, int], None] | None = None
     ) -> torch.Tensor:
     model.eval()
     
@@ -211,7 +213,14 @@ def generate_batch(
         
         image = noise_scheduler.step(noise_prediction, timestep, image).prev_sample # type: ignore
         
-        is_progress_step = step_index % max(1, total_steps // 10) == 0
+        if progress_callback is not None:
+            progress_callback(step_index +1, total_steps)
+        
+        is_progress_step = (
+            progress_callback is None 
+            and step_index % max(1, total_steps // 10) == 0
+        )
+        
         if is_progress_step:
             elapsed = time.time() - start_time
             percent = 100 * step_index / total_steps
