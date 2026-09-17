@@ -1,0 +1,22 @@
+name: diffproj
+ 
+channels:
+  - conda-forge
+ 
+dependencies:
+  - python=3.11
+  - pip
+  - numpy
+  - pandas
+  - pillow
+  - opencv
+  - pydicom
+  - matplotlib
+  - pyyaml
+ 
+  - pip:
+      - diffusers
+      - transformers
+      - monai
+      - torchmetrics[image]
+      - streamlit
