@@ -174,13 +174,19 @@ with tab_generate:
  
     with settings_column:
         if is_conditional:
+            label_options = ["Any"] + class_names
             selected_label = st.selectbox(
                 "Category",
-                options=class_names,
+                options=label_options,
                 help="Which diagnosis the model should generate.",
             )
-            class_index = class_names.index(selected_label)
-            null_class_index = len(class_names)
+            
+            if selected_label == "Any":
+                class_index = len(class_names)
+                null_class_index = None
+            else:
+                class_index = class_names.index(selected_label)
+                null_class_index = len(class_names)
  
             guidance_scale = st.slider(
                 "Guidance scale",
@@ -188,8 +194,9 @@ with tab_generate:
                 max_value=10.0,
                 value=float(config["conditional"]["guidance_scale"]),
                 step=0.5,
+                disabled=(selected_label == "Any"),
                 help="How strongly the model should follow the requested category. "
-                     "1.0 = no guidance. Higher values follow the label more closely, but produce less varied images."
+                     "1.0 = no guidance. Higher values follow the label more closely, but produce less varied images. Not applicable when Category is set to Any."
             )
         else:
             selected_label = None
