@@ -15,7 +15,7 @@ paths:
 
 
 data:
-  image_size: 64
+  image_size: 128
   batch_size: 64
   num_workers: 4
   train_ratio: 0.7
