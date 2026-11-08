@@ -6,11 +6,12 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from utils.config import load_config
+from data.common import parse_label_string, write_filename_csv
+from utils.config import load_config, pick, resolve_path
 
 
 def read_csv_rows(csv_path: str | Path) -> list[dict]:
-    with open(csv_path, newline="") as f:
+    with open(csv_path, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         return list(reader)
     
@@ -26,37 +27,10 @@ def get_dominant_label(patient_labels: list[str]) -> str:
 
 
 
-def parse_label_string(raw_value: str, separator: str, no_finding_value: str | None) -> list[str]:
-    """
-    Converts one cell from the CSV into a Python list. 
-    """
-    
-    raw_value = raw_value.strip()
-    
-    no_label_present = raw_value == ""
-    marked_as_no_finding = no_finding_value is not None and raw_value == no_finding_value
-    if no_label_present or marked_as_no_finding:
-        return []
-    
-    label_parts = raw_value.split(separator)
-    
-    cleaned_labels = []
-    for part in label_parts:
-        cleaned_part = part.strip()
-        if cleaned_part != "":
-            cleaned_labels.append(cleaned_part)
-    
-    return cleaned_labels
-
-
-
 def group_filenames_by_patient(
     rows: list[dict],
     filename_col: str,
-    patient_id_col: str,
-    label_col: str,
-    label_separator: str,
-    no_finding_value: str
+    patient_id_col: str
 ) -> dict[str, list[str]]:
     patient_to_filenames = defaultdict(list)
     for row in rows:
@@ -113,15 +87,6 @@ def split_patients_per_label(
         "val": val_patients,
         "test": test_patients
     }
-    
-    
-    
-def write_filenames_csv(filenames: list[str], output_path: Path):
-    with open(output_path, "w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["filename"])
-        for filename in filenames:
-            writer.writerow([filename])
             
 
 
@@ -132,7 +97,7 @@ def print_label_distribution(split_name: str, filenames: list[str], filename_to_
             label_counter[label] += 1
             
             
-    print(f"\n {split_name} label distribution {len(filenames)} images:")
+    print(f"\n{split_name} label distribution ({len(filenames)} images):")
     for label, count in sorted(label_counter.items()):
         percent = 100 * count / len(filenames) if filenames else 0
         print(f"    {label:25s} {count:6d} images ({percent:.1f}%)")
@@ -151,31 +116,19 @@ def main():
     parser.add_argument("--val-ratio", type=float, default=None)
     parser.add_argument("--test-ratio", type=float, default=None)
     parser.add_argument("--output-dir", default=None)
-    parser.add_argument("--seed", type=int, default=None, help="Random number generator seed for reproductability")
+    parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducible split")
     args = parser.parse_args()
     
     
     config = load_config()
     
     
-    def resolve(cli_value, config_value):
-            return cli_value if cli_value is not None else config_value
-        
-    
-    if args.csv is not None:
-        csv_path = Path(args.csv)
-    else:
-        csv_path = config["paths"]["csv_path"]
-        
-    train_ratio = resolve(args.train_ratio, config["data"]["train_ratio"])
-    val_ratio = resolve(args.val_ratio, config["data"]["val_ratio"])
-    test_ratio = resolve(args.test_ratio, config["data"]["test_ratio"])
-    seed = resolve(args.seed, config["seed"])
- 
-    if args.output_dir is not None:
-        output_dir = Path(args.output_dir)
-    else:
-        output_dir = config["paths"]["data_splits"]
+    csv_path = resolve_path(args.csv, config["paths"]["csv_path"])
+    train_ratio = pick(args.train_ratio, config["data"]["train_ratio"])
+    val_ratio = pick(args.val_ratio, config["data"]["val_ratio"])
+    test_ratio = pick(args.test_ratio, config["data"]["test_ratio"])
+    seed = pick(args.seed, config["seed"])
+    output_dir = resolve_path(args.output_dir, config["paths"]["data_splits"])
  
     
     ratio_sum = train_ratio + val_ratio + test_ratio
@@ -191,20 +144,15 @@ def main():
     print(f"    -> {len(rows)} rows loaded.")
     
     
-    # Collect the filenames for every patient
     patient_to_filenames = group_filenames_by_patient(
         rows,
         args.filename_col,
-        args.patient_id_col,
-        args.label_col,
-        args.label_separator,
-        args.no_finding_value
+        args.patient_id_col
     )
     
     print(f"    -> {len(patient_to_filenames)} patients found")
     
     
-    # Determine dominant label
     patient_to_dominant_label = get_patient_dominant_labels(
         rows,
         args.patient_id_col,
@@ -214,7 +162,6 @@ def main():
     )
     
     
-    # Group patients by dominant label
     label_to_patients = defaultdict(list)
     for patient_id, dominant_label in patient_to_dominant_label.items():
         label_to_patients[dominant_label].append(patient_id)
@@ -246,12 +193,11 @@ def main():
     test_filenames = patients_to_filenames(test_patients)
     
     
-    # Writing results into file 
     output_dir.mkdir(parents=True, exist_ok=True)
  
-    write_filenames_csv(train_filenames, output_dir / "train_filenames.csv")
-    write_filenames_csv(val_filenames, output_dir / "val_filenames.csv")
-    write_filenames_csv(test_filenames, output_dir / "test_filenames.csv")
+    write_filename_csv(train_filenames, output_dir / "train_filenames.csv")
+    write_filename_csv(val_filenames, output_dir / "val_filenames.csv")
+    write_filename_csv(test_filenames, output_dir / "test_filenames.csv")
  
     print(f"\nSplit files saved to: {output_dir}/")
     print(f"  train: {len(train_patients)} patient(s), {len(train_filenames)} image(s)")
@@ -268,7 +214,7 @@ def main():
             raw_label_value, args.label_separator, args.no_finding_value,
         )
         
-    print("\nLabel distribution check for every split")
+    print("\nLabel distribution per split")
     print_label_distribution("train", train_filenames, filename_to_labels)
     print_label_distribution("val", val_filenames, filename_to_labels)
     print_label_distribution("test", test_filenames, filename_to_labels)

@@ -25,15 +25,15 @@ def build_scheduler(
     
     if beta_schedule not in VALID_BETA_SCHEDULES:
         raise ValueError(
-            f"Unknown beta_schedule value: {beta_schedule}."
-            f"Supported values: {BetaSchedule}."
+            f"Unknown beta_schedule value: {beta_schedule}. "
+            f"Supported values: {VALID_BETA_SCHEDULES}."
         )
         
     if prediction_type not in VALID_PREDICTION_TYPES:
         raise ValueError(
-                    f"Unknown prediction_type value: {prediction_type}."
-                    f"Supported values: {PredictionType}."
-                )
+            f"Unknown prediction_type value: {prediction_type}. "
+            f"Supported values: {VALID_PREDICTION_TYPES}."
+        )
     
     
     noise_scheduler = DDPMScheduler(
@@ -73,9 +73,9 @@ if __name__ == "__main__":
     
     
     print("\nDDPMScheduler built from config.")
-    print(f"  num_train_timesteps: {scheduler_config["num_train_timesteps"]}")
-    print(f"  beta_schedule:       {scheduler_config["beta_schedule"]}")
-    print(f"  prediction_type:     {scheduler_config["prediction_type"]}")
+    print(f"  num_train_timesteps: {scheduler_config['num_train_timesteps']}")
+    print(f"  beta_schedule:       {scheduler_config['beta_schedule']}")
+    print(f"  prediction_type:     {scheduler_config['prediction_type']}")
     
     image_size = config["data"]["image_size"]
     in_channels = config["model"]["in_channels"]
@@ -92,4 +92,4 @@ if __name__ == "__main__":
     for timestep_val in timesteps_to_check:
         timestep = torch.IntTensor([timestep_val])
         noisy_image = noise_scheduler.add_noise(clean_image, noise, timestep)
-        print(f"    t = {timestep_val:4d}   ->  dispersion: {noisy_image.std().item():.4f}")
+        print(f"    t = {timestep_val:4d}   ->  std: {noisy_image.std().item():.4f}")

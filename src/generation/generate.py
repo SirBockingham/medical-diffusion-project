@@ -14,37 +14,26 @@ SRC_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SRC_DIR))
 
 from diffusers import DDPMScheduler, UNet2DModel  # type: ignore
+from utils.device import resolve_device
 
 from models.scheduler import build_scheduler_from_config
-from utils.config import load_config
-
-
-def resolve_device(device_setting: str) -> torch.device:
-    if device_setting == "auto":
-        if torch.cuda.is_available():
-            return torch.device("cuda")
-        return torch.device("cpu")
-    
-    return torch.device(device_setting)
-
+from utils.config import load_config, pick
 
 
 def find_latest_checkpoint(checkpoint_root: Path) -> Path:
+    """Last epoch_* folder of the newest run folder that has one.
++    Run folders start with a timestamp, so sorting by name is chronological."""
     if not checkpoint_root.exists():
-        raise FileNotFoundError(
-            f"Checkpoint folder not found: {checkpoint_root}"
-        )
-        
+        raise FileNotFoundError(f"Checkpoint folder not found: {checkpoint_root}")
         
     run_folders = sorted(
-        [item for item in checkpoint_root.iterdir()
-         if item.is_dir() and item.name.startswith("epoch_")],
+        [item for item in checkpoint_root.iterdir() if item.is_dir()],
         key=lambda folder: folder.name
     )
     
     for run_folder in reversed(run_folders):
         epoch_folders = sorted(
-            [item for item in checkpoint_root.iterdir()
+            [item for item in run_folder.iterdir()
              if item.is_dir() and item.name.startswith("epoch_")],
             key=lambda folder: folder.name
         )
@@ -60,7 +49,7 @@ def find_latest_checkpoint(checkpoint_root: Path) -> Path:
 def load_run_info(checkpoint_path: Path) -> dict | None:
     run_info_path = checkpoint_path.parent / "run_info.json"
     if not run_info_path.exists():
-        return
+        return None
     
     with open(run_info_path, "r", encoding="utf-8") as f:
         return json.load(f)
@@ -77,46 +66,46 @@ def check_checkpoint_compatibility(checkpoint_path: Path, config: dict) -> bool:
     current_image_size = config["data"]["image_size"]
     if run_info.get("image_size") != current_image_size:
         warnings.append(
-            f"image_size: checkpoint is {run_info.get("image_size")}, "
+            f"image_size: checkpoint is {run_info.get('image_size')}, "
             f"config.yaml is {current_image_size}"
         )
 
     current_conditional = config["conditional"]["enabled"]
     if run_info.get("conditional") != current_conditional:
         warnings.append(
-            f"conditional: checkpoint is {run_info.get("conditional")}, "
+            f"conditional: checkpoint is {run_info.get('conditional')}, "
             f"config.yaml is {current_conditional}"
         )
         
     current_prediction_type = config["scheduler"]["prediction_type"]
     if run_info.get("prediction_type") != current_prediction_type:
         warnings.append(
-            f"prediction_type: checkpoint is {run_info.get("prediction_type")}, "
+            f"prediction_type: checkpoint is {run_info.get('prediction_type')}, "
             f"config.yaml is {current_prediction_type}"
         )
         
     current_beta_schedule = config["scheduler"]["beta_schedule"]
     if run_info.get("beta_schedule") != current_beta_schedule:
         warnings.append(
-            f"beta_schedule: checkpoint is {run_info.get("beta_schedule")}, "
+            f"beta_schedule: checkpoint is {run_info.get('beta_schedule')}, "
             f"config.yaml is {current_beta_schedule}"
         )
         
     if not warnings:
         return True
         
-    print("WARNING: the checkpoint parameters don't match the config.yaml:")
+    print("Warning: the checkpoint does not match config.yaml:")
     for warning in warnings:
         print(f"  - {warning}")
-    print("The models own setting apply, but the scheduler and image size are loaded from the condig.yaml. "
-            "This can result in errors or wrong results.")
+    print("The model architecture comes from the checkpoint, but the scheduler and image size "
++          "come from config.yaml. This can give errors or wrong images.")
     
     if not sys.stdin.isatty():
-        print("\nNot interactive run, aborted.")
-        print("If intentional, use --checkpoint argument, or adjust config.yaml to fit the checkpoint")
+        print("\nNot an interactive run, aborted.")
+        print("Adjust config.yaml to match the checkpoint, or run it interactively to confirm.")
         return False
     
-    answer = input("\nProceed? (Y/N): ").strip().lower
+    answer = input("\nProceed? (Y/N): ").strip().lower()
     if answer in ("y", "yes"):
         print()
         return True
@@ -126,7 +115,7 @@ def check_checkpoint_compatibility(checkpoint_path: Path, config: dict) -> bool:
         
 
 
-def load_class_names(checkpoint_path : Path) -> list[str] | None:
+def load_class_names(checkpoint_path: Path) -> list[str] | None:
     class_names_path = checkpoint_path / "class_names.json"
     if not class_names_path.exists():
         return None
@@ -201,9 +190,9 @@ def generate_batch(
     
     for step_index, timestep in enumerate(noise_scheduler.timesteps):
         if use_guidance:
-            #Classifier-Free Guidance
+            #classifier-free fuidance
             conditional_prediction = model(image, timestep, class_labels=conditional_labels).sample
-            unconditional_prediction = model(image,timestep, class_labels=null_labels).sample
+            unconditional_prediction = model(image, timestep, class_labels=null_labels).sample
             noise_prediction = unconditional_prediction + guidance_scale * (conditional_prediction - unconditional_prediction)
         elif use_conditioning:
             noise_prediction = model(image, timestep, class_labels=conditional_labels).sample
@@ -214,7 +203,7 @@ def generate_batch(
         image = noise_scheduler.step(noise_prediction, timestep, image).prev_sample # type: ignore
         
         if progress_callback is not None:
-            progress_callback(step_index +1, total_steps)
+            progress_callback(step_index + 1, total_steps)
         
         is_progress_step = (
             progress_callback is None 
@@ -224,8 +213,8 @@ def generate_batch(
         if is_progress_step:
             elapsed = time.time() - start_time
             percent = 100 * step_index / total_steps
-            print(f"    denoising: {step_index:4d}/{total_steps}"
-                  f"({percent:.0f}, {elapsed:.1f})")
+            print(f"    denoising: {step_index:4d}/{total_steps} "
+                  f"({percent:.0f}%, {elapsed:.1f}s)")
             
     return image
     
@@ -285,7 +274,7 @@ def save_grid(images: torch.Tensor, output_path: Path) -> None:
             if image_array.shape[2] == 3:
                 axis.imshow(image_array)
             else:
-                axis.imashow(image_array[:, :, 0], cmap="gray")
+                axis.imshow(image_array[:, :, 0], cmap="gray")
     
     plt.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -311,18 +300,15 @@ def main():
     config = load_config()
     generation_config = config["generation"]
     
-    
-    def resolve(cli_value, config_value):
-        return cli_value if cli_value is not None else config_value
             
-    num_images = resolve(args.num_images, generation_config["num_images"])
-    batch_size = resolve(args.batch_size, generation_config["batch_size"])
-    num_inference_steps = resolve(args.num_inference_steps, generation_config["num_inference_steps"])
-    seed = resolve(args.seed, config["seed"])
+    num_images = pick(args.num_images, generation_config["num_images"])
+    batch_size = pick(args.batch_size, generation_config["batch_size"])
+    num_inference_steps = pick(args.num_inference_steps, generation_config["num_inference_steps"])
+    seed = pick(args.seed, config["seed"])
     if seed == -1:
         seed = None
-    device_setting = resolve(args.device, config["training"]["device"])
-    output_dir = resolve(args.output_dir, config["paths"]["outputs_generated_samples"])
+    device_setting = pick(args.device, config["training"]["device"])
+    output_dir = Path(pick(args.output_dir, config["paths"]["outputs_generated_samples"]))
     if args.checkpoint is not None:
         checkpoint_path = Path(args.checkpoint)
     else:
@@ -330,7 +316,7 @@ def main():
     image_size = config["data"]["image_size"]
     in_channels = config["model"]["in_channels"]
     device = resolve_device(device_setting)
-    guidance_scale = resolve(args.guidance_scale, config["conditional"]["guidance_scale"])
+    guidance_scale = pick(args.guidance_scale, config["conditional"]["guidance_scale"])
     
     if not check_checkpoint_compatibility(checkpoint_path, config):
         return
@@ -357,12 +343,12 @@ def main():
         null_class_index = len(class_names)
     
     
-    print("=== Image Generation ===")
+    print("Image Generation")
     print(f"    Checkpoint:         {checkpoint_path}")
     print(f"    Device:             {device}")
-    print(f"    Number of Images:   {num_images}")
-    print(f"    Image Size:         {image_size}")
-    print(f"    Denoising Step:     {num_inference_steps}")
+    print(f"    Number of images:   {num_images}")
+    print(f"    Image size:         {image_size}")
+    print(f"    Denoising step:     {num_inference_steps}")
     if seed is not None:
         print(f"    Seed:               {seed}")
     else:
@@ -370,10 +356,10 @@ def main():
         
     if class_index is not None:
         print(f"    Category:           {args.label} (index: {class_index})")
-        print(f"    Guidance Scale:     {guidance_scale}")
+        print(f"    Guidance scale:     {guidance_scale}")
     elif class_names is not None:
         print("    Category:           not set")
-    print(f"    Output directory    {output_dir}")
+    print(f"    Output directory:   {output_dir}")
     
     
     print("\n--- Loading Model ---")
@@ -402,7 +388,7 @@ def main():
         print(f"    Batch: {already_done + 1}-{already_done + current_batch_size} / {num_images}")
         
         batch_images = generate_batch(
-             model=model,
+            model=model,
             noise_scheduler=noise_scheduler,
             batch_size=current_batch_size,
             image_size=image_size,
@@ -423,7 +409,7 @@ def main():
     total_duration = time.time() - total_start_time
     
 
-    print("\n --- Saving ---")
+    print("\n--- Saving ---")
     saved_paths = save_images(generated_images, output_dir, start_index=0)
     print(f"    {len(saved_paths)} image(s) saved to: {output_dir}")
     
@@ -431,7 +417,7 @@ def main():
     save_grid(generated_images, grid_path)
     print(f"    Grid summary: {grid_path}")
     
-    print(f"\n Generation completed in {total_duration:.1f}s")
+    print(f"\nGeneration finished in {total_duration:.1f}s")
     
     
     

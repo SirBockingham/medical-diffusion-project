@@ -11,6 +11,7 @@ sys.path.insert(0, str(SRC_DIR))
 
 from diffusers import UNet2DModel  # type: ignore
 from PIL import Image
+from utils.device import resolve_device
 
 from generation.generate import (
     denormalize,
@@ -22,34 +23,16 @@ from models.scheduler import build_scheduler_from_config
 from utils.config import load_config
 
 
-def resolve_device(device_setting: str) -> torch.device:
-    if device_setting == "auto":
-        if torch.cuda.is_available():
-            return torch.device("cuda")
-        return torch.device("cpu")
-    
-    return torch.device(device_setting)
-
-
-
-def list_checkpoints(checkpoint_root: Path) -> dict:
+def list_checkpoints(checkpoint_root: Path) -> dict[str, list[Path]]:
+    """Run folder name -> its epoch_* folders, newest run first."""
     runs = {}
     
     if not checkpoint_root.exists():
         return runs
     
-    direct_epochs = sorted(
-        [item for item in checkpoint_root.iterdir()
-         if item.is_dir() and item.name.startswith("epoch_")],
-        key=lambda folder: folder.name,
-    )
-    if direct_epochs:
-        runs["direct epochs"] = direct_epochs
-    
     
     run_folders = sorted(
-        [item for item in checkpoint_root.iterdir()
-         if item.is_dir() and not item.name.startswith("epoch_")],
+        [item for item in checkpoint_root.iterdir() if item.is_dir()],
         key=lambda folder: folder.name,
         reverse=True
     )
@@ -102,13 +85,11 @@ def images_to_zip(images_uint8: torch.Tensor, metadata_text: str) -> bytes:
 def tensor_to_display_arrays(images: torch.Tensor) -> list:
     images_uint8 = denormalize(images.cpu())
  
+    # the three channels are near identical grey copies, the first one is shown
     display_arrays = []
     for index in range(images_uint8.shape[0]):
         array = images_uint8[index].permute(1, 2, 0).numpy()
-        if array.shape[2] == 3:
-            display_arrays.append(array[:, :, 0])
-        else:
-            display_arrays.append(array[:, :, 0])
+        display_arrays.append(array[:, :, 0])
  
     return display_arrays
 
@@ -127,7 +108,7 @@ available_runs = list_checkpoints(checkpoint_root)
 
 if not available_runs:
     st.sidebar.error(f"No checkpoints found in: {checkpoint_root}")
-    st.info("The model needs to be trained first\n")
+    st.info("Train a model first.")
     st.stop()
 
 selected_run = st.sidebar.selectbox(
@@ -141,7 +122,7 @@ selected_epoch_path = st.sidebar.selectbox(
     "Checkpoint",
     options=epoch_folders,
     format_func=lambda path: path.name,
-    index=len(epoch_folders) - 1 
+    index=len(epoch_folders) - 1
 )
 
 device_setting = st.sidebar.selectbox(
@@ -196,7 +177,7 @@ with tab_generate:
                 step=0.5,
                 disabled=(selected_label == "Any"),
                 help="How strongly the model should follow the requested category. "
-                     "1.0 = no guidance. Higher values follow the label more closely, but produce less varied images. Not applicable when Category is set to Any."
+                     "1.0 = no guidance. Higher values follow the label more closely, but give less varied images. Not used when Category is Any."
             )
         else:
             selected_label = None
@@ -352,12 +333,10 @@ with tab_model:
             st.error(
                 "The checkpoint settings are different from the config.yaml:\n\n"
                 + "\n".join(f"- {item}" for item in mismatches)
-                + "\n\nGeneration can lead errors or wrong results."
+                + "\n\nGeneration can give errors or wrong images."
             )
     else:
-        st.info(
-            "This checkpoint has no `run_info.json`"
-        )
+        st.info("This checkpoint has no `run_info.json`")
  
     if is_conditional:
         st.write("**Available categories:**")
@@ -366,7 +345,7 @@ with tab_model:
             
             
 with tab_help:
-    st.subheader("Usage Instructions")
+    st.subheader("Usage")
  
     st.markdown(
         """
@@ -393,7 +372,9 @@ always return exactly the same images.
         "python src/generation/generate.py --label Pneumonia --num-images 8\n\n"
         "# list available categories\n"
         "python src/generation/generate.py --list-labels\n\n"
-        "# FID evaluation\n"
-        "python src/evaluation/evaluate_fid.py --num-samples 500",
+        "# evaluation (FID, density/coverage, MS-SSIM)\n"
+        "python src/evaluation/evaluation.py --num-samples 500\n\n"
+        "# classifier-based evaluation (TRTR / TSTR / TRTS)\n"
+        "python src/evaluation/trts_tstr.py",
         language="bash",
     )

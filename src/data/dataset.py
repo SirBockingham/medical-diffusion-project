@@ -1,5 +1,4 @@
 import csv
-import os
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -11,72 +10,22 @@ from PIL import Image
 from torch.utils.data import Dataset
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from data.common import build_filename_index, parse_label_string, read_filename_csv
 from utils.config import load_config
 
 
-def build_filename_index(images_dir: Path) -> dict:
-    filename_to_path = {}
-    allowed_extensions = {".png", ".jpg", ".jpeg"}
-    for folder_path, _subfolders, files in os.walk(images_dir):
-        for filename in files:
-            if Path(filename).suffix.lower() in allowed_extensions:
-                filename_to_path.setdefault(filename, os.path.join(folder_path, filename))
-    return filename_to_path
-
-
-
-def _parse_label_string(raw_value: str, separator: str, no_finding_value: str | None) -> list[str]:
-    """
-    Converts one cell from the CSV into a Python list. 
-    """
-    
-    raw_value = raw_value.strip()
-    
-    no_label_present = raw_value == ""
-    marked_as_no_finding = no_finding_value is not None and raw_value == no_finding_value
-    if no_label_present or marked_as_no_finding:
-        return []
-    
-    label_parts = raw_value.split(separator)
-    
-    cleaned_labels = []
-    for part in label_parts:
-        cleaned_part = part.strip()
-        if cleaned_part != "":
-            cleaned_labels.append(cleaned_part)
-    
-    return cleaned_labels
-
-
-
 def _discover_labels(rows: list[dict], label_col: str, separator: str, no_finding_value: str | None) -> list[str]:
-    """Collects all of the appearing unique labels
-
-    Args:
-        rows (list[dict]): A list of the key-value pairs for every row
-        label_col (str): Name of the column containing the labels
-        separator (str): Character separating the labels
-        no_finding_value (str | None): Optional value for no finding
-
-    Returns:
-        list[str]: A sorted list of the unique labels
-    """
+    """Sorted list of every label that appears in the label column."""
     
     unique_labels = set()
 
     for row in rows:
         raw_value = row.get(label_col, "")
-        labels_in_row = _parse_label_string(raw_value, separator, no_finding_value)
+        labels_in_row = parse_label_string(raw_value, separator, no_finding_value)
         for label in labels_in_row:
             unique_labels.add(label)
     
     return sorted(unique_labels)
-
-
-
-def load_filenames(path):
-    with open(path, newline="", encoding="utf-8") as f:
-        return {row["filename"] for row in csv.DictReader(f)}
 
 
 
@@ -104,13 +53,13 @@ class MedicalImageDataset(Dataset):
         
         filename_to_path = build_filename_index(self.images_dir)
         
-        with open(csv_path, newline="") as f:
+        with open(csv_path, newline="", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             rows = list(reader)
             
         if labels is None:
             self.labels = _discover_labels(rows, label_col, label_separator, no_finding_value)
-            if  len(self.labels) == 0:
+            if len(self.labels) == 0:
                 print("No labels found")
                 
         else:
@@ -143,7 +92,7 @@ class MedicalImageDataset(Dataset):
             
             full_path = filename_to_path.get(filename)
             raw_label_value = row.get(label_col, "")
-            parsed_labels = _parse_label_string(raw_label_value, label_separator, no_finding_value)
+            parsed_labels = parse_label_string(raw_label_value, label_separator, no_finding_value)
             
             
             known_labels_for_sample = []
@@ -163,7 +112,7 @@ class MedicalImageDataset(Dataset):
             self.samples.append({
                 "filename": filename,
                 "path": full_path,
-                "labels": parsed_labels,
+                "labels": known_labels_for_sample,
                 "class_index": class_index,
                 "patient_id": row.get(patient_id_col)
             })
@@ -172,7 +121,7 @@ class MedicalImageDataset(Dataset):
         if single_label_only:
             print(f"    -> conditional mode: {len(self.class_names)} classes + 1 null token")
         
-        # Image transformations
+        
         transform_steps: list[Callable] = [T.Resize((image_size, image_size))]
  
         if augment:
@@ -254,7 +203,7 @@ class MedicalImageDataset(Dataset):
 if __name__ == "__main__":
     config = load_config()
     
-    dataset = MedicalImageDataset (
+    dataset = MedicalImageDataset(
         csv_path=str(config["paths"]["csv_path"]),
         images_dir=str(config["paths"]["data_raw"]),
         image_size=config["data"]["image_size"]
@@ -264,9 +213,9 @@ if __name__ == "__main__":
     print(f"{len(dataset.labels)} discovered labels: {dataset.labels}")
     
     sample = dataset[0]
-    print(f"Image shape: {sample["image"].shape}")
-    print(f"Labels: {sample["label_names"]}")
-    print(f"Label vector: {sample["labels"]}")
+    print(f"Image shape: {sample['image'].shape}")
+    print(f"Labels: {sample['label_names']}")
+    print(f"Label vector: {sample['labels']}")
     
     
     dataset.check(n=4)
