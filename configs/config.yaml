@@ -8,6 +8,7 @@ paths:
   checkpoints: "checkpoints"
   outputs_checks: "outputs/checks"
   outputs_generated_samples: "outputs/generated_samples"
+  outputs_evaluations: "outputs/evaluations"
 
 
   csv_filename: "Data_Entry_2017.csv"
@@ -81,11 +82,30 @@ generation:
 
 
 evaluation:
+  metrics:
+    - fid
+    - density_coverage
+    - ms_ssim
   num_samples: 2000
   batch_size: 16
   num_inference_steps: 200
   per_class: true
   per_class_num_samples: 500
+  nearest_k: 5
+  msssim_pairs: 1000
+
+
+
+trts_tstr:
+  classes: []                 # empty = every class of the checkpoint
+  samples_per_class: 500
+  test_samples_per_class: 200
+  epochs: 10
+  batch_size: 64
+  learning_rate: 0.0001
+  weight_decay: 0.0001
+  pretrained: true
+  repeats: 1
 
 
 
