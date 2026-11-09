@@ -64,6 +64,7 @@ training:
   use_ema: true
   ema_decay: 0.999
   lr_warmup_steps: 500
+  mixed_precision: true
 
 
 

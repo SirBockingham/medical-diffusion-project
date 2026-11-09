@@ -14,13 +14,13 @@ sys.path.insert(0, str(SRC_DIR))
 from diffusers import DDPMScheduler, UNet2DModel  # type: ignore
 from diffusers.optimization import get_cosine_schedule_with_warmup
 from diffusers.training_utils import EMAModel
-from utils.device import resolve_device
 
 from data.data_loading import build_dataloaders_from_config
 from data.dataset import MedicalImageDataset
 from models.scheduler import build_scheduler_from_config
 from models.unet import build_unet_from_config, count_parameters
 from utils.config import load_config, pick
+from utils.device import resolve_device
 
 
 def create_run_directory(checkpoint_dir: Path, config: dict) -> Path:
@@ -168,6 +168,7 @@ def train_one_epoch(
         log_every_n_steps: int,
         max_batches: int,
         epoch: int,
+        grad_scaler: torch.amp.GradScaler,
         conditional: bool = False,
         label_dropout_chance: float = 0.0,
         null_class_index: int = 0,
@@ -211,20 +212,26 @@ def train_one_epoch(
                     class_labels
                 )
                 
-            noise_prediction = model(noisy_images, timesteps, class_labels=class_labels).sample
         else:
-            noise_prediction = model(noisy_images, timesteps).sample
+            class_labels = None
+            
+        with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=grad_scaler.is_enabled()):
+            noise_prediction = model(noisy_images, timesteps, class_labels=class_labels).sample
         
+        # the loss is computed in fp32 even when the forward pass ran in fp16
+        loss = F.mse_loss(noise_prediction.float(), noise)
         
-        loss = F.mse_loss(noise_prediction, noise)
-        
+        # the scaler keeps small fp16 gradients from rounding to zero and skips the step on overflow;
+        # with mixed precision off it passes everything through unchanged
         optimizer.zero_grad()
-        loss.backward()
+        grad_scaler.scale(loss).backward()
         
         if max_grad_norm > 0:
+            grad_scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
             
-        optimizer.step()
+        grad_scaler.step(optimizer)
+        grad_scaler.update()
         
         if lr_scheduler is not None:
             lr_scheduler.step()
@@ -260,7 +267,8 @@ def evaluate(
         num_train_timesteps: int,
         max_batches: int,
         conditional: bool = False,
-        ema_model: EMAModel | None = None
+        ema_model: EMAModel | None = None,
+        use_amp: bool = False
     ) -> float:
     
     model.eval()
@@ -301,12 +309,13 @@ def evaluate(
         
         if conditional:
             class_labels = batch["class_index"].to(device)
-            noise_prediction = model(noisy_images, timesteps, class_labels=class_labels).sample
         else:
-            noise_prediction = model(noisy_images, timesteps).sample
+            class_labels = None
             
+        with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=use_amp):
+            noise_prediction = model(noisy_images, timesteps, class_labels=class_labels).sample
             
-        loss = F.mse_loss(noise_prediction, noise)
+        loss = F.mse_loss(noise_prediction.float(), noise)
         
         total_loss += loss.item()
         batch_count += 1
@@ -356,6 +365,7 @@ def main():
     lr_warmup_steps = training_config["lr_warmup_steps"]
     
     device = resolve_device(device_setting)
+    use_amp = training_config["mixed_precision"] and device.type == "cuda"
     
     if args.resume_from is not None:
         checkpoint_dir = Path(args.resume_from).resolve().parent
@@ -368,7 +378,7 @@ def main():
     print("Training")
     print(f"    Device:             {device}")
     if device.type == "cuda":
-        print(f"    GPU:    {torch.cuda.get_device_name(0)}")
+        print(f"    GPU:                {torch.cuda.get_device_name(0)}")
     print(f"    Number of epochs:   {epochs}")
     print(f"    Learning rate:      {learning_rate}")
     print(f"    Checkpoint dir:     {checkpoint_dir}")
@@ -382,6 +392,7 @@ def main():
         print("    EMA:                off")
     if lr_warmup_steps > 0:
         print(f"    LR warmup:          {lr_warmup_steps} steps + cosine decay")
+    print(f"    Mixed precision:    {'on (fp16)' if use_amp else 'off'}")
     
     print("\n--- Building dataloaders ---")
     dataloaders = build_dataloaders_from_config(config)
@@ -439,13 +450,15 @@ def main():
     else:
         lr_scheduler = None
         
+    grad_scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
+        
     
     start_epoch = 1
     if args.resume_from is not None:
         resume_path = Path(args.resume_from)
         completed_epoch = load_checkpoint(resume_path, model, optimizer, ema_model, lr_scheduler)
         start_epoch = completed_epoch + 1
-        print(f"Resuming after epoch {start_epoch}, from: {resume_path}")
+        print(f"Resuming after epoch {completed_epoch}, from: {resume_path}")
         
     
     print("\n--- Training ---")
@@ -464,6 +477,7 @@ def main():
             log_every_n_steps=log_every_n_steps,
             max_batches=max_batches_per_epoch,
             epoch=epoch,
+            grad_scaler=grad_scaler,
             conditional=conditional,
             label_dropout_chance=label_dropout_chance,
             null_class_index=null_class_index,
@@ -479,7 +493,8 @@ def main():
             num_train_timesteps=num_train_timesteps,
             max_batches=max_batches_per_epoch,
             conditional=conditional,
-            ema_model=ema_model
+            ema_model=ema_model,
+            use_amp=use_amp
         )
         
         
