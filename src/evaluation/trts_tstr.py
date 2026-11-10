@@ -21,7 +21,7 @@ from classifier import predict, train_classifier
 from features import to_grayscale, to_uint8_rgb
 
 from data.data_loading import build_datasets_from_config, collate_batch
-from evaluation.evaluation import file_stem
+from evaluation import file_stem
 from generation.generate import (
     check_checkpoint_compatibility,
     find_latest_checkpoint,
